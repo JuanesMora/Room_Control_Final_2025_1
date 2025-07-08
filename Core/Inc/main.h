@@ -31,6 +31,9 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "stm32l4xx_hal_adc.h"
+extern ADC_HandleTypeDef hadc1;
+
 
 /* USER CODE END Includes */
 

@@ -3,6 +3,11 @@
 #include "ssd1306_fonts.h"
 #include <string.h>
 #include <stdio.h>
+#include "adc.h"
+#include <stdlib.h>   // para abs(int)
+
+
+extern TIM_HandleTypeDef htim3;  // Acceso al temporizador para PWM
 
 // Default password
 static const char DEFAULT_PASSWORD[] = "1234";
@@ -139,7 +144,7 @@ void room_control_process_key(room_control_t *room, char key) {
     room->display_update_needed = true;
 }
 
-void room_control_set_temperature(room_control_t *room, float temperature) {
+void room_control_set_temperature(room_control_t *room, int temperature) {
     room->current_temperature = temperature;
     
     // Update fan level automatically if not in manual override
@@ -209,51 +214,19 @@ static void room_control_change_state(room_control_t *room, room_state_t new_sta
 }
 
 static void room_control_update_display(room_control_t *room) {
-    char display_buffer[32];
-    
+     char buf[32];
     ssd1306_Fill(Black);
-    
-    // TODO: TAREA - Implementar actualización de pantalla según estado
-    switch (room->current_state) {
-        case ROOM_STATE_LOCKED:
-            ssd1306_SetCursor(10, 10);
-            ssd1306_WriteString("SISTEMA", Font_7x10, White);
-            ssd1306_SetCursor(10, 25);
-            ssd1306_WriteString("BLOQUEADO", Font_7x10, White);
-            break;
-            
-        case ROOM_STATE_INPUT_PASSWORD:
-            // TODO: Mostrar asteriscos según input_index
-            ssd1306_SetCursor(10, 10);
-            ssd1306_WriteString("CLAVE:", Font_7x10, White);
-            // Ejemplo: mostrar asteriscos
-            break;
-            
-        case ROOM_STATE_UNLOCKED:
-            // TODO: Mostrar estado del sistema (temperatura, ventilador)
-            ssd1306_SetCursor(10, 10);
-            ssd1306_WriteString("ACCESO OK", Font_7x10, White);
-            
-            snprintf(display_buffer, sizeof(display_buffer), "Temp: %.1fC", room->current_temperature);
-            ssd1306_SetCursor(10, 25);
-            ssd1306_WriteString(display_buffer, Font_7x10, White);
-            
-            snprintf(display_buffer, sizeof(display_buffer), "Fan: %d%%", room->current_fan_level);
-            ssd1306_SetCursor(10, 40);
-            ssd1306_WriteString(display_buffer, Font_7x10, White);
-            break;
-            
-        case ROOM_STATE_ACCESS_DENIED:
-            ssd1306_SetCursor(10, 10);
-            ssd1306_WriteString("ACCESO", Font_7x10, White);
-            ssd1306_SetCursor(10, 25);
-            ssd1306_WriteString("DENEGADO", Font_7x10, White);
-            break;
-            
-        default:
-            break;
-    }
-    
+
+    // *** Siempre muestra temperatura y fan ***
+    ssd1306_SetCursor(0, 0);
+    snprintf(buf, sizeof(buf), "Temp: %.1f C", room->current_temperature);
+    ssd1306_WriteString(buf, Font_7x10, White);
+
+    ssd1306_SetCursor(0, 12);
+    snprintf(buf, sizeof(buf), "Fan: %d%%", room->current_fan_level);
+    ssd1306_WriteString(buf, Font_7x10, White);
+
+    // (Si quieres, aquí puedes saltarte por completo el switch y pintar solo esto)
     ssd1306_UpdateScreen();
 }
 
@@ -268,11 +241,25 @@ static void room_control_update_door(room_control_t *room) {
 }
 
 static void room_control_update_fan(room_control_t *room) {
-    // TODO: TAREA - Implementar control PWM del ventilador
-    // Calcular valor PWM basado en current_fan_level
-    // Ejemplo:
-    // uint32_t pwm_value = (room->current_fan_level * 99) / 100;  // 0-99 para period=99
-    // __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pwm_value);
+    // 1) Leer el ADC y convertir a temperatura
+    int adc_raw     = ADC_ReadRaw();
+    int    temperature = ADC_ConvertToCelsius(adc_raw);
+
+    // 2) Actualizar temperatura en la estructura y solicitar refresco de pantalla
+    if (abs(room->current_temperature - temperature) > 0.01f) {
+        room->current_temperature   = temperature;
+        room->display_update_needed = true;
+    }
+
+    // 3) Calcular PWM según nivel de fan (se actualiza en room_control_set_temperature)
+    uint32_t pwm_duty = 0;
+    switch (room->current_fan_level) {
+        case FAN_LEVEL_OFF:  pwm_duty = 0;   break;
+        case FAN_LEVEL_LOW:  pwm_duty = 30;  break;
+        case FAN_LEVEL_MED:  pwm_duty = 70;  break;
+        case FAN_LEVEL_HIGH: pwm_duty = 100; break;
+    }
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pwm_duty);
 }
 
 static fan_level_t room_control_calculate_fan_level(float temperature) {
